@@ -1,46 +1,181 @@
+import { Campaigns, Flows, Events } from 'klaviyo';
 import axios from 'axios';
 
-const ENDPOINT_URL = 'https://test.connect.boomi.com/ws/simple/upsertTestListener;boomi_auth=dGhld2luZXNvY2lldHktNzBEMjJLLkwzMkcwSjplN2E4NTAxMy1iYzUyLTQ1MGMtOWRhZi1hNzNiYjY0NjFiMTg=';
+///// Update with your Received SMS Metric ID /////
+const ReceivedSMSMetricId = "R8US2y";
+const ENDPOINT_URL = "";
+
+async function getLatestEventPropertiesByProfileAndMetric(profileId = null, metricId = null) {
+  try {
+    let filter = null;
+    if (profileId && metricId) {
+      filter = `and(equals(profile_id,\"${profileId}\"),equals(metric_id,\"${metricId}\"))`;
+    }
+    const response = await Events.getEvents({
+      events_fields: ['timestamp', 'event_properties', 'datetime', 'uuid'],
+      filter: filter,
+      sort: '-datetime',
+      page_size: 10 // Fetch 10 most recent events
+    });
+    const events = response?.body?.data || [];
+    if (events.length > 0) {
+      // Only log the latest event for debugging
+      console.log('Latest event object:', events[0]);
+      if (events[0] && events[0].attributes) {
+        console.log('Latest eventProperties:', events[0].attributes.eventProperties);
+      }
+      // Return the eventProperties of the latest event
+      return events[0].attributes?.eventProperties || null;
+    } else {
+      return null;
+    }
+  } catch (error) {
+    console.error('Error getting latest event:', error);
+    throw error;
+  }
+}
 
 export default async (event, profile, context) => {
-  const S = (v) => (v === null || v === undefined ? '' : String(v));
-
-  // From profile
-  const email = S(profile?.data?.attributes?.email);
-  const mobile = S(profile?.data?.attributes?.phone_number);
-
-  // From Sent SMS event - this has the rich metadata we want!
-  const evAttrs = event?.data?.attributes || {};
-  const ep = evAttrs.event_properties || evAttrs.eventProperties || {};
-
-  // These fields are available in Sent SMS events
-  const last_sms_message_sent = S(ep['Message Name']);           // "Campaign/Flow message name"
-  const message_type = S(ep['Message Type']);           // "automated_response"
-  const response = S(ep['Message Body']);       // Full SMS content
-  const message_id = S(ep['$message']);                 // Klaviyo internal ID
-  const provider_message_id = S(ep['Message ID']);      // Provider ID (e.g., "SMccc8d1e6f070e0aece0ba1f8bb18603d")
-
-  // Build the payload with the rich SMS metadata
-  const payload = {
-    email,
-    mobile,
-    last_sms_message_sent,           // Campaign/Flow message name
-    message_type,           // Type of message
-    message_id,             // Klaviyo message ID
-    response        // What was actually sent
+  // Get Profile Data
+  const profileId = profile.data.id;
+  const profileEmail = profile.data.attributes.email;
+  const profilePhone = profile.data.attributes.phone_number;
+  
+  // Get Sent SMS Event Data
+  const { event_properties } = event.data.attributes;
+  const flowId = event_properties.$flow; // Flow ID
+  const messageId = event_properties.$message; // Message ID
+  const sentSMSMessageBody = event_properties["Message Body"]; // SMS Message Body
+  
+  console.log(`Flow ID: ${flowId || 'not present'}`);
+  console.log(`Message ID: ${messageId || 'not present'}`);
+  
+  // Initialize data object to collect all information
+  let responseData = {
+    email: profileEmail,
+    mobile: profilePhone,
+    last_sms_message_sent: null,
+    flow_name: null,
+    message_type: null, // 'flow' or 'campaign'
+    message_id: messageId,
+    flow_id: flowId,
+    response: sentSMSMessageBody
   };
-
-  // Send to endpoint
-  try {
-    console.log('Sending SMS metadata to endpoint:', payload);
-    const response = await axios.post(ENDPOINT_URL, payload, {
-      headers: { 'Content-Type': 'application/json' }
-    });
-    console.log('✓ Successfully sent SMS metadata to endpoint. Status:', response.status);
-  } catch (error) {
-    console.log('✗ Error sending to endpoint:', error.message);
+  
+  // Check if variables are defined before using them
+  const hasFlowId = flowId && flowId.trim() !== '';
+  const hasMessageId = messageId && messageId.trim() !== '';
+  
+  // Check if both flowId and messageId exist
+  if (hasFlowId && hasMessageId) {
+    console.log("Both flowId and messageId detected - this is a flow message");
+    responseData.message_type = 'flow';
+    
+    try {
+      // Get flow name using flowId
+      const flowResponse = await Flows.getFlow(flowId, {
+        fields: ['name']
+      });
+      
+      const flowName = flowResponse?.body?.data?.attributes?.name || "No name available";
+      responseData.flow_name = flowName;
+      console.log("Flow name:", flowName);
+      
+      // Get flow message using messageId
+      const flowMessageResponse = await Flows.getFlowMessage(messageId, {
+        fields: {
+          'flow-message': ['name']
+        }
+      });
+      
+      const flowMessageName = flowMessageResponse?.body?.data?.attributes?.name || "No name available";
+      responseData.campaign_or_flow_message_name = flowMessageName;
+      console.log("Flow message name:", flowMessageName);
+      
+    } catch (error) {
+      console.log("Error:", error.message);
+    }
+    
+  } else if (hasMessageId && !hasFlowId) {
+    // Only messageId exists - get campaign message
+    console.log("Only messageId detected - this is a campaign message");
+    responseData.message_type = 'campaign';
+    
+    try {
+      const campaignResponse = await Campaigns.getCampaignMessage(messageId, {
+        fields: {
+          campaign: ['name']
+        },
+        include: ['campaign']
+      });
+      
+      let campaignName = "Campaign name not available";
+      if (campaignResponse.body.included && Array.isArray(campaignResponse.body.included)) {
+        const campaign = campaignResponse.body.included.find(item => item.type === 'campaign');
+        if (campaign && campaign.attributes && campaign.attributes.name) {
+          campaignName = campaign.attributes.name;
+        }
+      }
+      
+      responseData.campaign_or_flow_message_name = campaignName;
+      console.log("Campaign name:", campaignName);
+      
+    } catch (error) {
+      console.log("Error:", error.message);
+    }
+    
+  } else {
+    // Neither flowId nor messageId exists - look up last event
+    console.log("Neither flowId nor messageId detected - looking up last SMS event");
+    responseData.message_type = 'last_sms_event';
+    try {
+      console.log(`Looking for last SMS event for profile ${profileId} with metric ID ${ReceivedSMSMetricId}`);
+      // Use the helper function to get the latest eventProperties for this profile and metric
+      const eventProperties = await getLatestEventPropertiesByProfileAndMetric(profileId, ReceivedSMSMetricId);
+      if (eventProperties) {
+        responseData.campaign_or_flow_message_name = eventProperties['Message Name'] || eventProperties['Subject'] || 'Last Event';
+        responseData.message_type = eventProperties['Message Type'] || 'last_sms_event';
+        responseData.message_id = eventProperties['$message'] || null;
+        responseData.flow_id = eventProperties['$flow'] || null;
+        // If $flow exists, look up the flow name
+        if (eventProperties['$flow']) {
+          try {
+            const flowResponse = await Flows.getFlow(eventProperties['$flow'], {
+              fields: ['name']
+            });
+            responseData.flow_name = flowResponse?.body?.data?.attributes?.name || null;
+          } catch (flowError) {
+            console.log('Error looking up flow name:', flowError.message);
+            responseData.flow_name = null;
+          }
+        }
+      } else {
+        console.log(`No events found for profile ID ${profileId}`);
+        responseData.campaign_or_flow_message_name = 'No events found for this profile';
+      }
+    } catch (error) {
+      console.log("Error getting events:", error.message);
+      console.log("Error details:", error);
+      responseData.campaign_or_flow_message_name = 'Error retrieving events';
+    }
   }
+  
+  // Log the final data that will be sent to the endpoint
+  console.log("Data to send to endpoint:", responseData);
+  
+  ///// UNCOMMENT THIS TO SEND DATA TO THE ENDPOINT /////
 
-  // Return the payload
-  return payload;
-};
+   try {
+     console.log("Sending data to endpoint...");
+     const response = await axios.post(ENDPOINT_URL, responseData, {
+       headers: {
+         'Content-Type': 'application/json'
+       }
+     });
+     console.log("✓ Successfully sent data to endpoint. Response status:", response.status);
+   } catch (error) {
+     console.log("✗ Error sending data to endpoint:", error.message);
+   }
+  
+  return responseData;
+}
