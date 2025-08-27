@@ -3,7 +3,7 @@ import axios from 'axios';
 
 ///// Update with your Received SMS Metric ID /////
 const ReceivedSMSMetricId = "R8US2y";
-const ENDPOINT_URL = "";
+const ENDPOINT_URL = "https://test.connect.boomi.com/ws/simple/upsertTestListener;boomi_auth=dGhld2luZXNvY2lldHktNzBEMjJLLkwzMkcwSjplN2E4NTAxMy1iYzUyLTQ1MGMtOWRhZi1hNzNiYjY0NjFiMTg=";
 
 async function getLatestEventPropertiesByProfileAndMetric(profileId = null, metricId = null) {
   try {
@@ -46,6 +46,7 @@ export default async (event, profile, context) => {
   const flowId = event_properties.$flow; // Flow ID
   const messageId = event_properties.$message; // Message ID
   const sentSMSMessageBody = event_properties["Message Body"]; // SMS Message Body
+  const sentSMSMessageType = event_properties["Message Type"]; // SMS Message Body
   
   console.log(`Flow ID: ${flowId || 'not present'}`);
   console.log(`Message ID: ${messageId || 'not present'}`);
@@ -55,10 +56,11 @@ export default async (event, profile, context) => {
     email: profileEmail,
     mobile: profilePhone,
     last_sms_message_sent: null,
-    flow_name: null,
-    message_type: null, // 'flow' or 'campaign'
+    message_type: sentSMSMessageType,
+    message_source: null, // 'flow' or 'campaign'
     message_id: messageId,
     flow_id: flowId,
+    flow_name: null,
     response: sentSMSMessageBody
   };
   
@@ -69,7 +71,7 @@ export default async (event, profile, context) => {
   // Check if both flowId and messageId exist
   if (hasFlowId && hasMessageId) {
     console.log("Both flowId and messageId detected - this is a flow message");
-    responseData.message_type = 'flow';
+    responseData.message_source = 'flow';
     
     try {
       // Get flow name using flowId
@@ -89,7 +91,7 @@ export default async (event, profile, context) => {
       });
       
       const flowMessageName = flowMessageResponse?.body?.data?.attributes?.name || "No name available";
-      responseData.campaign_or_flow_message_name = flowMessageName;
+      responseData.last_sms_message_sent = flowMessageName;
       console.log("Flow message name:", flowMessageName);
       
     } catch (error) {
@@ -99,7 +101,7 @@ export default async (event, profile, context) => {
   } else if (hasMessageId && !hasFlowId) {
     // Only messageId exists - get campaign message
     console.log("Only messageId detected - this is a campaign message");
-    responseData.message_type = 'campaign';
+    responseData.message_source = 'campaign';
     
     try {
       const campaignResponse = await Campaigns.getCampaignMessage(messageId, {
@@ -117,7 +119,7 @@ export default async (event, profile, context) => {
         }
       }
       
-      responseData.campaign_or_flow_message_name = campaignName;
+      responseData.last_sms_message_sent = campaignName;
       console.log("Campaign name:", campaignName);
       
     } catch (error) {
@@ -127,14 +129,14 @@ export default async (event, profile, context) => {
   } else {
     // Neither flowId nor messageId exists - look up last event
     console.log("Neither flowId nor messageId detected - looking up last SMS event");
-    responseData.message_type = 'last_sms_event';
+    responseData.message_source = 'last_sms_event';
     try {
       console.log(`Looking for last SMS event for profile ${profileId} with metric ID ${ReceivedSMSMetricId}`);
       // Use the helper function to get the latest eventProperties for this profile and metric
       const eventProperties = await getLatestEventPropertiesByProfileAndMetric(profileId, ReceivedSMSMetricId);
       if (eventProperties) {
-        responseData.campaign_or_flow_message_name = eventProperties['Message Name'] || eventProperties['Subject'] || 'Last Event';
-        responseData.message_type = eventProperties['Message Type'] || 'last_sms_event';
+        responseData.last_sms_message_sent = eventProperties['Message Name'] || eventProperties['Subject'] || 'Last Event';
+        responseData.message_source = eventProperties['Message Type'] || 'last_sms_event';
         responseData.message_id = eventProperties['$message'] || null;
         responseData.flow_id = eventProperties['$flow'] || null;
         // If $flow exists, look up the flow name
@@ -151,12 +153,12 @@ export default async (event, profile, context) => {
         }
       } else {
         console.log(`No events found for profile ID ${profileId}`);
-        responseData.campaign_or_flow_message_name = 'No events found for this profile';
+        responseData.last_sms_message_sent = 'No events found for this profile';
       }
     } catch (error) {
       console.log("Error getting events:", error.message);
       console.log("Error details:", error);
-      responseData.campaign_or_flow_message_name = 'Error retrieving events';
+      responseData.last_sms_message_sent = 'Error retrieving events';
     }
   }
   
