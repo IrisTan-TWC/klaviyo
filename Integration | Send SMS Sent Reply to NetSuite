@@ -1,0 +1,46 @@
+import axios from 'axios';
+
+const ENDPOINT_URL = 'https://test.connect.boomi.com/ws/simple/upsertTestListener;boomi_auth=dGhld2luZXNvY2lldHktNzBEMjJLLkwzMkcwSjplN2E4NTAxMy1iYzUyLTQ1MGMtOWRhZi1hNzNiYjY0NjFiMTg=';
+
+export default async (event, profile, context) => {
+  const S = (v) => (v === null || v === undefined ? '' : String(v));
+
+  // From profile
+  const email = S(profile?.data?.attributes?.email);
+  const mobile = S(profile?.data?.attributes?.phone_number);
+
+  // From Sent SMS event - this has the rich metadata we want!
+  const evAttrs = event?.data?.attributes || {};
+  const ep = evAttrs.event_properties || evAttrs.eventProperties || {};
+
+  // These fields are available in Sent SMS events
+  const last_sms_message_sent = S(ep['Message Name']);           // "Campaign/Flow message name"
+  const message_type = S(ep['Message Type']);           // "automated_response"
+  const response = S(ep['Message Body']);       // Full SMS content
+  const message_id = S(ep['$message']);                 // Klaviyo internal ID
+  const provider_message_id = S(ep['Message ID']);      // Provider ID (e.g., "SMccc8d1e6f070e0aece0ba1f8bb18603d")
+
+  // Build the payload with the rich SMS metadata
+  const payload = {
+    email,
+    mobile,
+    last_sms_message_sent,           // Campaign/Flow message name
+    message_type,           // Type of message
+    message_id,             // Klaviyo message ID
+    response        // What was actually sent
+  };
+
+  // Send to endpoint
+  try {
+    console.log('Sending SMS metadata to endpoint:', payload);
+    const response = await axios.post(ENDPOINT_URL, payload, {
+      headers: { 'Content-Type': 'application/json' }
+    });
+    console.log('✓ Successfully sent SMS metadata to endpoint. Status:', response.status);
+  } catch (error) {
+    console.log('✗ Error sending to endpoint:', error.message);
+  }
+
+  // Return the payload
+  return payload;
+};
