@@ -3,7 +3,7 @@ import axios from 'axios';
 
 ///// Update with your Received SMS Metric ID /////
 const ReceivedSMSMetricId = "R8US2y";
-const ENDPOINT_URL = "https://test.connect.boomi.com/ws/simple/upsertTestListener;boomi_auth=dGhld2luZXNvY2lldHktNzBEMjJLLkwzMkcwSjplN2E4NTAxMy1iYzUyLTQ1MGMtOWRhZi1hNzNiYjY0NjFiMTg=";
+const ENDPOINT_URL = "";
 
 async function getLatestEventPropertiesByProfileAndMetric(profileId = null, metricId = null) {
   try {
